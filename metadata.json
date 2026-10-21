@@ -1,0 +1,6 @@
+{
+  "name": "Dhwani - Bangla Text to Audio Studio",
+  "description": "Studio-grade Bengali (Bangla) text-to-speech audio generator with expressive AI voices, customizable emotional styles, audio wave player, and instant WAV downloads.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
