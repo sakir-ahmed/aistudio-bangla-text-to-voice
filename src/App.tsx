@@ -82,7 +82,7 @@ export default function App() {
     setHistory(updated);
     try {
       // Keep only up to 15 items in storage to avoid quota limits
-      const toStore = updated.slice(0, 15).map(({ id, title, text, voice, style, audioBase64, mimeType, createdAt, wordCount, characterCount, isDialogue }) => ({
+      const toStore = updated.slice(0, 15).map(({ id, title, text, voice, style, audioBase64, mimeType, createdAt, duration, timestamps, wordCount, characterCount, isDialogue }) => ({
         id,
         title,
         text,
@@ -91,6 +91,8 @@ export default function App() {
         audioBase64,
         mimeType,
         createdAt,
+        duration,
+        timestamps,
         wordCount,
         characterCount,
         isDialogue,
@@ -175,6 +177,8 @@ export default function App() {
         audioBase64: data.audioBase64,
         mimeType: data.mimeType,
         createdAt: Date.now(),
+        duration: data.duration || 0,
+        timestamps: data.timestamps || [],
         wordCount: data.wordCount || trimmed.split(/\s+/).filter(Boolean).length,
         characterCount: data.characterCount || trimmed.length,
       };

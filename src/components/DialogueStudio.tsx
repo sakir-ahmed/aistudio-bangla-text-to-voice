@@ -109,6 +109,8 @@ export const DialogueStudio: React.FC<DialogueStudioProps> = ({ onGeneratedTrack
         audioBase64: data.audioBase64,
         mimeType: data.mimeType,
         createdAt: Date.now(),
+        duration: data.duration || 0,
+        timestamps: data.timestamps || [],
         wordCount: combinedText.split(/\s+/).filter(Boolean).length,
         characterCount: combinedText.length,
         isDialogue: true,

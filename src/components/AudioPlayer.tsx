@@ -13,6 +13,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { AudioVisualizer } from './AudioVisualizer';
+import { TranscriptTimestamps } from './TranscriptTimestamps';
 import { GeneratedAudioTrack } from '../types';
 
 interface AudioPlayerProps {
@@ -328,6 +329,28 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({ track }) => {
           />
         </div>
       </div>
+
+      {/* 2-Second Timestamps & Transcript Panel */}
+      {track.timestamps && track.timestamps.length > 0 && (
+        <div className="mt-4 pt-4 border-t border-slate-800/80">
+          <TranscriptTimestamps
+            timestamps={track.timestamps}
+            currentTime={currentTime}
+            duration={duration || track.duration || 0}
+            title={track.title}
+            isPlaying={isPlaying}
+            onSeek={(targetTime) => {
+              if (audioRef.current) {
+                audioRef.current.currentTime = targetTime;
+                setCurrentTime(targetTime);
+                if (!isPlaying) {
+                  audioRef.current.play().then(() => setIsPlaying(true)).catch(() => {});
+                }
+              }
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 };

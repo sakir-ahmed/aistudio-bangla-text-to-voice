@@ -29,6 +29,16 @@ export interface SampleBanglaText {
   suggestedStyleId: string;
 }
 
+export interface TimestampSegment {
+  id: string;
+  start: number;
+  end: number;
+  startLabel: string;
+  endLabel: string;
+  timeLabel: string;
+  text: string;
+}
+
 export interface GeneratedAudioTrack {
   id: string;
   title: string;
@@ -39,10 +49,11 @@ export interface GeneratedAudioTrack {
   audioBase64: string;
   mimeType: string;
   createdAt: number;
-  duration?: number;
+  duration: number;
   wordCount: number;
   characterCount: number;
   isDialogue?: boolean;
+  timestamps: TimestampSegment[];
 }
 
 export interface DialogueLine {

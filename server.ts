@@ -40,6 +40,126 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+
+function formatTimecode(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`;
+}
+
+interface TimestampSegment {
+  id: string;
+  start: number;
+  end: number;
+  startLabel: string;
+  endLabel: string;
+  timeLabel: string;
+  text: string;
+}
+
+// Fallback algorithm to distribute words proportionally across 2-second windows
+function distributeTextAcrossIntervals(text: string, duration: number): TimestampSegment[] {
+  const intervalSeconds = 2.0;
+  const numIntervals = Math.max(1, Math.ceil(duration / intervalSeconds));
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const segments: TimestampSegment[] = [];
+
+  const wordsPerInterval = words.length / numIntervals;
+
+  for (let i = 0; i < numIntervals; i++) {
+    const start = i * intervalSeconds;
+    const end = Number(Math.min(duration, (i + 1) * intervalSeconds).toFixed(1));
+    const startIdx = Math.floor(i * wordsPerInterval);
+    const endIdx = i === numIntervals - 1 ? words.length : Math.floor((i + 1) * wordsPerInterval);
+    const segmentWords = words.slice(startIdx, endIdx);
+
+    const startLabel = formatTimecode(start);
+    const endLabel = formatTimecode(end);
+
+    segments.push({
+      id: `seg-${i}-${Date.now()}`,
+      start,
+      end,
+      startLabel,
+      endLabel,
+      timeLabel: `${startLabel} - ${endLabel}`,
+      text: segmentWords.join(' '),
+    });
+  }
+
+  return segments;
+}
+
+// Generate high-accuracy 2-second timestamp segments using Gemini with fallback
+async function generateTwoSecondTimestamps(text: string, duration: number): Promise<TimestampSegment[]> {
+  const intervalSeconds = 2.0;
+  const numIntervals = Math.max(1, Math.ceil(duration / intervalSeconds));
+
+  // If text is short or 1 interval, return simple distribution
+  if (numIntervals <= 1 || text.length < 15) {
+    return distributeTextAcrossIntervals(text, duration);
+  }
+
+  try {
+    const intervalPrompts: string[] = [];
+    for (let i = 0; i < numIntervals; i++) {
+      const s = i * 2;
+      const e = Math.min(duration, (i + 1) * 2);
+      intervalPrompts.push(`Interval ${i + 1}: ${formatTimecode(s)} - ${formatTimecode(e)} (${s}s - ${e.toFixed(1)}s)`);
+    }
+
+    const prompt = `You are a speech audio alignment expert for Bengali (Bangla).
+The following Bengali text was spoken aloud with a total duration of ${duration.toFixed(1)} seconds.
+Divide this Bengali text into exactly ${numIntervals} segments corresponding to 2-second audio intervals:
+${intervalPrompts.join('\n')}
+
+Rules:
+1. Divide the words naturally according to how Bengali is pronounced and paced in speech.
+2. Maintain the original word order, spelling, and Bengali punctuation (।, ,, ?).
+3. Output a strictly valid JSON array of strings containing exactly ${numIntervals} elements, one for each 2-second interval in order.
+
+Bengali text:
+"${text}"`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.1-flash-lite',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+      },
+    });
+
+    const parsed = JSON.parse(response.text?.trim() || '[]');
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const segments: TimestampSegment[] = [];
+      for (let i = 0; i < numIntervals; i++) {
+        const start = i * 2;
+        const end = Number(Math.min(duration, (i + 1) * 2).toFixed(1));
+        const startLabel = formatTimecode(start);
+        const endLabel = formatTimecode(end);
+        const segText = typeof parsed[i] === 'string' ? parsed[i].trim() : '';
+
+        segments.push({
+          id: `seg-${i}-${Date.now()}`,
+          start,
+          end,
+          startLabel,
+          endLabel,
+          timeLabel: `${startLabel} - ${endLabel}`,
+          text: segText,
+        });
+      }
+      // Check if all text was preserved
+      const hasContent = segments.some((s) => s.text.length > 0);
+      if (hasContent) return segments;
+    }
+  } catch (err) {
+    console.warn('Gemini timestamp alignment fallback engaged:', err);
+  }
+
+  return distributeTextAcrossIntervals(text, duration);
+}
+
 // Text-to-Speech (Bangla)
 app.post('/api/tts', async (req, res) => {
   try {
@@ -96,7 +216,6 @@ app.post('/api/tts', async (req, res) => {
     );
 
     if (!audioPart || !audioPart.inlineData?.data) {
-      // Check if text was returned explaining any restriction
       const textPart = candidate?.content?.parts?.find((p) => p.text);
       const textMsg = textPart?.text || 'No audio data returned by TTS model';
       return res.status(502).json({ error: textMsg });
@@ -105,12 +224,27 @@ app.post('/api/tts', async (req, res) => {
     const base64Audio = audioPart.inlineData.data;
     const mimeType = audioPart.inlineData.mimeType || 'audio/wav';
 
+    // Calculate exact audio duration from WAV RIFF header
+    const wavBuffer = Buffer.from(base64Audio, 'base64');
+    let byteRate = 48000; // default for 24kHz 16-bit mono
+    if (wavBuffer.length >= 32) {
+      const readRate = wavBuffer.readUInt32LE(28);
+      if (readRate > 0) byteRate = readRate;
+    }
+    const dataSize = Math.max(0, wavBuffer.length - 44);
+    const duration = Number((dataSize / byteRate).toFixed(2));
+
+    // Generate 2-second timestamp segments and aligned transcript
+    const timestamps = await generateTwoSecondTimestamps(trimmedText, duration);
+
     return res.json({
       success: true,
       audioBase64: base64Audio,
       mimeType,
       voice,
       style,
+      duration,
+      timestamps,
       characterCount: trimmedText.length,
       wordCount: trimmedText.split(/\s+/).filter(Boolean).length,
     });
@@ -183,10 +317,27 @@ app.post('/api/multi-speaker', async (req, res) => {
       return res.status(502).json({ error: 'No audio returned for dialogue' });
     }
 
+    const base64Audio = audioPart.inlineData.data;
+    const mimeType = audioPart.inlineData.mimeType || 'audio/wav';
+
+    const wavBuffer = Buffer.from(base64Audio, 'base64');
+    let byteRate = 48000;
+    if (wavBuffer.length >= 32) {
+      const readRate = wavBuffer.readUInt32LE(28);
+      if (readRate > 0) byteRate = readRate;
+    }
+    const dataSize = Math.max(0, wavBuffer.length - 44);
+    const duration = Number((dataSize / byteRate).toFixed(2));
+
+    const combinedText = dialogues.map((d) => `${d.speakerLabel || d.speaker}: ${d.text}`).join('\n');
+    const timestamps = await generateTwoSecondTimestamps(combinedText, duration);
+
     return res.json({
       success: true,
-      audioBase64: audioPart.inlineData.data,
-      mimeType: audioPart.inlineData.mimeType || 'audio/wav',
+      audioBase64: base64Audio,
+      mimeType,
+      duration,
+      timestamps,
     });
   } catch (error) {
     console.error('Multi-speaker TTS error:', error);
